@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding:utf-8
-
+import struct
 import time
 from toughlib import utils, logger,dispatch
 from toughwlan.manage.portal.base import BaseHandler
@@ -8,6 +8,11 @@ from twisted.internet import defer
 from toughlib.permit import permit
 from txportal import client
 import functools
+
+@permit.route(r"/portal/ab")
+class ABLoginHandler(BaseHandler):
+    def get(self):
+        self.write('ok')
 
 @permit.route(r"/portal/login")
 class LoginHandler(BaseHandler):
@@ -21,7 +26,10 @@ class LoginHandler(BaseHandler):
         if self.settings.debug:
             logger.info( u"Open portal auth page, wlan params:{0}".format(utils.safeunicode(wlan_params)))
 
-        tpl = self.get_template_attrs(ssid,ispcode)
+        if ssid == 'default':
+            tpl = {'page_title':u'wlan portal','tpl_path':'default'}
+        else:
+            tpl = self.get_template_attrs(ssid,ispcode)
         self.render(self.get_login_template(tpl['tpl_path']), msg=None, tpl=tpl, qstr=qstr, **wlan_params)
 
 
@@ -51,13 +59,16 @@ class LoginHandler(BaseHandler):
             self.render_error(msg=u"AC server portal_vendor {0} not support ".format(_vendor))
             return
 
+        hm_mac=(wlan_params.get('wlanstamac','').replace(".",":").replace('-',':'))
+        macbstr = hm_mac and struct.pack('BBBBBB',*[int(i,base=16) for i in hm_mac.split(':')]) or None
+
         send_portal = functools.partial(
             client.send,
             secret,
             log=logger,
             debug=self.settings.debug,
             vendor=_vendor,
-            timeout=15
+            timeout=5
         )
         vendor = client.PortalClient.vendors.get(_vendor)
 
@@ -89,7 +100,7 @@ class LoginHandler(BaseHandler):
             challenge_resp = None
             if is_chap:
                 ## req challenge ################################
-                challenge_req=vendor.proto.newReqChallenge(userIp, secret, chap = is_chap)
+                challenge_req=vendor.proto.newReqChallenge(userIp, secret, mac=macbstr, chap = is_chap)
                 challenge_resp = yield send_portal(data = challenge_req, host=ac_addr, port=ac_port)
 
                 if challenge_resp.errCode > 0:
@@ -103,7 +114,7 @@ class LoginHandler(BaseHandler):
                 ## req auth ################################
                 auth_req = vendor.proto.newReqAuth(
                     userIp, username, password, challenge_resp.reqId, challenge_resp.get_challenge(), 
-                    secret, ac_addr, serialNo=challenge_req.serialNo, chap=is_chap)
+                    secret, ac_addr, serialNo=challenge_req.serialNo,mac=macbstr, chap=is_chap)
             else:
                 auth_req = vendor.proto.newReqAuth(userIp, username,password,0,None,secret,ac_addr,chap=is_chap)
 
@@ -114,15 +125,16 @@ class LoginHandler(BaseHandler):
                     self.set_session_user(username, userIp, utils.get_currtime(),qstr=qstr)
                     self.redirect(firsturl)
                     return
+                text_info = auth_resp.get_text_info()
                 _err_msg=u"{0},{1}".format(
                     vendor.mod.AckAuthErrs[auth_resp.errCode], 
-                    utils.safeunicode(auth_resp.get_text_info()[0] or "")
+                    utils.safeunicode(text_info and text_info[0] or "")
                 )
                 raise Exception(_err_msg)
 
             ### aff_ack ################################
             affack_req = vendor.proto.newAffAckAuth(
-                userIp, secret,ac_addr,auth_req.serialNo,auth_resp.reqId, chap = is_chap)
+                userIp, secret,ac_addr,auth_req.serialNo,auth_resp.reqId, mac=macbstr,chap = is_chap)
 
             send_portal(data=affack_req, host=ac_addr, port=ac_port,noresp=True)
 

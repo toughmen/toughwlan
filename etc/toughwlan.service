@@ -1,0 +1,13 @@
+[Unit]  
+Description=supervisord  
+After=network.target
+   
+[Service]  
+Type=forking  
+ExecStart=/usr/local/bin/supervisord -c /etc/toughwlan.conf
+ExecReload=/usr/local/bin/supervisorctl -c /etc/toughwlan.conf reload
+ExecStop=/usr/local/bin/supervisorctl -c /etc/toughwlan.conf shutdown
+PrivateTmp=true  
+   
+[Install]  
+WantedBy=multi-user.target  
